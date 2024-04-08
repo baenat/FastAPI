@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 app = FastAPI()
@@ -20,25 +20,29 @@ users_fake = [
 ]
 
 # Method GET
-@app.get('/users')
+@app.get('/users', status_code=200)
 async def users_all():
   return users_fake
 
-@app.get('/users/{id}')
+@app.get('/users/{id}', status_code=200)
 async def user_by_id(id: int):
-  return search_user(id)
+  user = search_user(id)
+  if not type(user) == User:
+    raise HTTPException(status_code=404, detail=user)
+
+  return { 'detail': user }
 
 # Method POST
-@app.post('/users')
+@app.post('/users', status_code=201)
 async def user(user: User):
   if type(search_user(user.id)) == User:
-    return { 'error': 'User already exists' }
+    raise HTTPException(status_code=409, detail='User already exists')
   
   users_fake.append(user)
-  return { 'message': 'User has been registered' }
+  return { 'detail': 'User has been registered' }
   
 # Method PUT
-@app.put('/users/{id}')
+@app.put('/users/{id}', status_code=200)
 async def user(id: int, user: User):
   found = False
   for index, saved_user in enumerate(users_fake):
@@ -47,23 +51,24 @@ async def user(id: int, user: User):
       found = True
   
   if not found:
-    return { 'message': 'User has not been updated' }
-  
+    raise HTTPException(status_code=404, detail='User already exists')
+    
   return user
 
 # Method DELETE
-@app.delete('/users/{id}')
+@app.delete('/users/{id}', status_code=200)
 async def user(id: int):
   found = False
-  message = ''
   
   for index, saved_user in enumerate(users_fake):
     if saved_user.id == id:
       del users_fake[index]
       found = True
   
-  message = 'User has been deleted' if found else 'User has not been deleted'
-  return {'message': message}
+  if not found:
+    raise HTTPException(status_code=404, detail='User has not been deleted')
+  
+  return {'detail': 'User has been deleted'}
     
 
 def search_user(id: int):
@@ -71,4 +76,4 @@ def search_user(id: int):
   try:
     return list(users)[0]
   except:
-    return { 'error':'User not found' }
+    return 'User not found'
