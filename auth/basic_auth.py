@@ -49,6 +49,13 @@ async def current_user(token: str = Depends(oauth2)):
       detail='Invalid credentials',
       headers={'www-authenticate': 'Bearer'}
     )
+  
+  if user.disabled:
+    raise HTTPException(
+      status_code=status.HTTP_400_BAD_REQUEST,
+      detail='Inactive User',
+      headers={'www-authenticate': 'Bearer'}
+    )
   return user
 
 
