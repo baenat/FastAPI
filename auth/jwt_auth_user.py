@@ -14,18 +14,25 @@ SECRET_KEY = "dd9ee7644d3e5cd84d4b1b1cab2eeca96204e7c70365b947a3820bb78dd2716e"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_DURATION = 1
 
-crypt = CryptContext(schemes=['bcrypt'])
+bcrypt = CryptContext(schemes=['bcrypt'])
 
 class User(BaseModel):
   username: str
   full_name: str
   email: str
   disabled: bool
-  
-class UserDB(User):
+
+class UserInDB(User):
   password: str
-  
-users_db = {
+
+class Token(BaseModel):
+  access_token: str
+  token_type: str
+
+class TokenData(BaseModel):
+  username: str | None = None
+
+fake_users_db = {
   "julianbaena": {
     "username": "julianbaena",
     "full_name": "Julian Baena",
@@ -42,21 +49,54 @@ users_db = {
   }
 }
 
-def search_user_db(username: str):
+def verify_password(plain_password, hashed_password):
   
-  if username in users_db:
-    return UserDB(**users_db[username])
-  
-
-def search_user(username: str):
-  
-  if username in users_db:
-    return User(**users_db[username])
+    return bcrypt.verify(plain_password, hashed_password)
 
 
-def auth_user(token: str = Depends(oauth2)):
+def get_user_db(db, username: str):
   
-  exception = HTTPException(
+  if username in db:
+    return UserInDB(**fake_users_db[username])
+  
+
+def get_user(db, username: str):
+  
+  if username in db:
+    return User(**fake_users_db[username])
+
+
+def authenticate_user(fake_db, username: str, password: str):
+  
+    user = get_user_db(fake_db, username)
+    if not user:
+        return False
+    if not verify_password(password, user.password):
+        return False
+      
+    return user
+
+
+def create_access_token(data: dict, expires_delta: timedelta | None = None):
+  
+    if expires_delta:
+        expire = datetime.now(timezone.utc) + expires_delta        
+        
+    else:
+        expire = datetime.now(timezone.utc) + timedelta(minutes=15)
+        
+    to_encode = {
+      'sub': data.username,
+      'exp': expire
+    }
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+    return encoded_jwt
+ 
+
+def get_current_user(token: str = Depends(oauth2)):
+  
+  credentials_exception = HTTPException(
     status_code=status.HTTP_401_UNAUTHORIZED,
     detail='Could not validate credentials',
     headers={'www-authenticate': 'Bearer'}
@@ -68,16 +108,20 @@ def auth_user(token: str = Depends(oauth2)):
     username: str = payload.get('sub')
     
     if username is None:
-      raise exception
+      raise credentials_exception
     
   except JWTError as e:
-    print(e.args[0], 'ERROR')
-    raise exception
+    # print(e.args[0], 'ERROR')
+    raise credentials_exception
   
-  return search_user(username)
+  user = get_user(fake_users_db, username=username)
+  if user is None:
+      raise credentials_exception
+  
+  return user
 
 
-async def current_user(user: User = Depends(auth_user)):
+async def get_current_active_user(user: User = Depends(get_current_user)):
   
   if user.disabled:
     raise HTTPException(
@@ -90,38 +134,29 @@ async def current_user(user: User = Depends(auth_user)):
 
 
 @app.post('/login')
-async def login(form: OAuth2PasswordRequestForm = Depends()):
+async def login(form_data: OAuth2PasswordRequestForm = Depends()):
   
-  user_db = users_db.get(form.username)
-  if not user_db:
+  user = authenticate_user(fake_users_db, form_data.username, form_data.password)
+  if not user:
     raise HTTPException(
-      status_code=status.HTTP_400_BAD_REQUEST,
-      detail='User does not correct'
-    )
-  
-  user = search_user_db(form.username)
-  if not crypt.verify(form.password, user.password):
-    raise HTTPException(
-      status_code=status.HTTP_400_BAD_REQUEST,
-      detail='Password is not correct'
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Incorrect username or password",
+        headers={"WWW-Authenticate": "Bearer"},
     )
     
-  expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_DURATION)
-  
-  ACCESS_TOKEN = {
-    'sub': form.username,
-    'exp': expire
-  }
-  token_user = jwt.encode(
-    ACCESS_TOKEN,
-    SECRET_KEY,
-    ALGORITHM
+  access_token_expires = timedelta(minutes=ACCESS_TOKEN_DURATION)
+  access_token = create_access_token(
+    data=form_data, expires_delta=access_token_expires
   )
   
-  return { 'access_token': {token_user}, 'token_type': 'bearer' }
+  return Token(access_token=access_token, token_type="bearer")
 
 
 @app.get('/users/auth')
-async def user_auth(user: User = Depends(current_user)):
-  return user
+async def user_auth(current_user: User = Depends(get_current_active_user)):
+  return current_user
 
+
+@app.get("/users/items")
+async def read_items(current_user: User = Depends(get_current_active_user)):
+    return [{"item_id": "Foo", "owner": current_user.username}]
